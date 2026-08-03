@@ -18,6 +18,7 @@ class DownloadPage(QWidget):
         super().__init__()
         self.downloaders = []
         self.downloaderMap = {}
+        self._pendingDelete = []
         self._initUI()
 
     def _initUI(self):
@@ -116,6 +117,7 @@ class DownloadPage(QWidget):
         ))
         downloader.final.connect(lambda ok, name, dl=downloader: self._onFinished(ok, name, dl))
         downloader.sig_rate_limit.connect(lambda: self.sig_rate_limit.emit(True))
+        downloader.finished.connect(lambda dl=downloader: self._cleanupThread(dl))
 
         downloader.start()
         self.sig_start.emit(bookname)
@@ -150,11 +152,7 @@ class DownloadPage(QWidget):
             return
 
         if downloader._completed:
-            if downloader in self.downloaders:
-                self.downloaders.remove(downloader)
-            del self.downloaderMap[id(downloader)]
-            self.tableWidget.removeRow(info['row'])
-            self._syncRows()
+            self._removeRow(downloader)
             return
 
         reply = QMessageBox.question(
@@ -163,24 +161,21 @@ class DownloadPage(QWidget):
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
         if reply == QMessageBox.Yes:
+            if downloader not in self._pendingDelete:
+                self._pendingDelete.append(downloader)
+            info['deleteBtn'].setEnabled(False)
+            info['statusLabel'].setText("正在停止...")
             downloader.stop()
-            downloader.wait(3000)
-            if downloader in self.downloaders:
-                self.downloaders.remove(downloader)
-            del self.downloaderMap[id(downloader)]
-            self.tableWidget.removeRow(info['row'])
-            self._syncRows()
 
-    def _syncRows(self):
-        newMap = {}
-        for dl_id, data in self.downloaderMap.items():
-            old_row = data['row']
-            new_row = self.tableWidget.indexAt(
-                self.tableWidget.cellWidget(old_row, 0).pos()
-            ).row() if self.tableWidget.cellWidget(old_row, 0) else old_row
-            data['row'] = new_row
-            newMap[dl_id] = data
-        self.downloaderMap = newMap
+    def _cleanupThread(self, downloader):
+        if downloader in self._pendingDelete:
+            self._pendingDelete.remove(downloader)
+            self._removeRow(downloader)
+
+    def _syncRows(self, removed_row):
+        for data in self.downloaderMap.values():
+            if data['row'] > removed_row:
+                data['row'] -= 1
 
     def _onFinished(self, success, bookname, downloader):
         info = self.downloaderMap.get(id(downloader))
@@ -189,7 +184,10 @@ class DownloadPage(QWidget):
             info['pauseBtn'].setEnabled(False)
             if not success:
                 info['deleteBtn'].setText("移除")
-                info['deleteBtn'].clicked.disconnect()
+                try:
+                    info['deleteBtn'].clicked.disconnect()
+                except (RuntimeError, TypeError):
+                    pass
                 info['deleteBtn'].clicked.connect(
                     lambda: self._removeRow(downloader))
         self.finished.emit(success, bookname)
@@ -200,6 +198,8 @@ class DownloadPage(QWidget):
             return
         if downloader in self.downloaders:
             self.downloaders.remove(downloader)
+        removed_row = info['row']
         del self.downloaderMap[id(downloader)]
-        self.tableWidget.removeRow(info['row'])
-        self._syncRows()
+        self.tableWidget.removeRow(removed_row)
+        self._syncRows(removed_row)
+        downloader.deleteLater()

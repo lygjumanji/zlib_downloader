@@ -8,6 +8,7 @@ from .search_page import SearchPage
 from .download_page import DownloadPage
 from .setting_page import SettingPage
 from .account_page import AccountPage
+from ..common.config import cfg
 
 
 class Window(QMainWindow):
@@ -58,16 +59,29 @@ class Window(QMainWindow):
             self.statusBar().showMessage(f"下载失败: {bookname}", 3000)
 
     def closeEvent(self, event):
-        try:
-            if self.searchPage.searchEngine and self.searchPage.searchEngine.isRunning():
-                self.searchPage.searchEngine.quit()
-                self.searchPage.searchEngine.wait(2000)
-        except RuntimeError:
-            pass
+        self._stopSearchThread()
+        self._stopDownloadThreads()
+        self.accountPage.stop_worker()
+        cfg.save()
+        event.accept()
+
+    def _stopSearchThread(self):
+        engine = self.searchPage.searchEngine
+        if engine and engine.isRunning():
+            if not engine.wait(3000):
+                engine.terminate()
+                engine.wait(1000)
+
+    def _stopDownloadThreads(self):
         for downloader in self.downloadPage.downloaders[:]:
             try:
                 downloader.stop()
-                downloader.wait(3000)
+            except RuntimeError:
+                continue
+        for downloader in self.downloadPage.downloaders[:]:
+            try:
+                if not downloader.wait(5000):
+                    downloader.terminate()
+                    downloader.wait(1000)
             except RuntimeError:
                 pass
-        event.accept()

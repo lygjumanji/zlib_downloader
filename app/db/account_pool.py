@@ -4,6 +4,7 @@ import os
 from sqlalchemy import create_engine, Column, Integer, String, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import event
 from random import choice
 from loguru import logger
 
@@ -15,9 +16,17 @@ else:
 DB_PATH = os.path.join(BASE_DIR, 'accounts.db')
 DATABASE_URL = f'sqlite:///{DB_PATH}'
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, connect_args={'timeout': 30})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+
+@event.listens_for(engine, "connect")
+def _set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=30000")
+    cursor.close()
 
 
 class OlibAccount(Base):
@@ -80,6 +89,27 @@ class AccountPool:
             self.db.rollback()
         return None
 
+    def reserve_account(self):
+        try:
+            row = self.db.execute(
+                text("SELECT remix_id, remix_key FROM tb_name WHERE num > 0 ORDER BY RANDOM() LIMIT 1")
+            ).first()
+            if not row:
+                logger.info("No available account with num > 0")
+                return None
+            updated = self.db.query(OlibAccount).filter(
+                OlibAccount.remix_id == row.remix_id,
+                OlibAccount.num > 0
+            ).update({OlibAccount.num: OlibAccount.num - 1})
+            self.db.commit()
+            if updated:
+                return {'remix_id': row.remix_id, 'remix_key': row.remix_key}
+            return self.reserve_account()
+        except SQLAlchemyError as e:
+            logger.error(f"Error reserving account: {e}")
+            self.db.rollback()
+        return None
+
     def get_all(self):
         try:
             accounts = self.db.query(OlibAccount).all()
@@ -132,11 +162,13 @@ class AccountPool:
 
     def decrement_num(self, remix_id: int):
         try:
-            account = self.db.query(OlibAccount).filter_by(remix_id=remix_id).first()
-            if account and account.num > 0:
-                account.num -= 1
-                self.db.commit()
-                logger.info(f"Account {remix_id} num decremented to {account.num}")
+            updated = self.db.query(OlibAccount).filter(
+                OlibAccount.remix_id == remix_id,
+                OlibAccount.num > 0
+            ).update({OlibAccount.num: OlibAccount.num - 1})
+            self.db.commit()
+            if updated:
+                logger.info(f"Account {remix_id} num decremented")
         except SQLAlchemyError as e:
             logger.error(f"Error decrementing account: {e}")
             self.db.rollback()
@@ -158,7 +190,7 @@ class AccountPool:
             if account:
                 account.downloads_limit = downloads_limit
                 account.downloads_today = downloads_today
-                account.num = downloads_limit - downloads_today
+                account.num = max(0, downloads_limit - downloads_today)
                 self.db.commit()
                 logger.info(f"Account {remix_id} limits updated: {downloads_limit}/{downloads_today}")
         except SQLAlchemyError as e:
@@ -166,4 +198,7 @@ class AccountPool:
             self.db.rollback()
 
     def __del__(self):
-        self.db.close()
+        try:
+            self.db.close()
+        except Exception:
+            pass

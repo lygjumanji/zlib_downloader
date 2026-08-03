@@ -1,5 +1,4 @@
 # coding:utf-8
-import random
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton,
@@ -18,6 +17,9 @@ class SearchPage(QWidget):
         self.books = None
         self.searchEngine = None
         self.add_cb = False
+        self._searchSeq = 0
+        self._searchEngines = set()
+        self._currentPagination = None
         self._initUI()
         self._bind()
 
@@ -115,41 +117,31 @@ class SearchPage(QWidget):
         cfg.set("accurate", self.accurate_CheckBox.isChecked())
 
     def _nextPage(self):
-        if self.searchEngine and self.searchEngine.pagination:
-            nxt = self.searchEngine.pagination.get('next')
-            if nxt:
-                self.search(nxt)
+        nxt = self._currentPagination.get('next') if self._currentPagination else None
+        if nxt:
+            self.search(nxt)
 
     def _prePage(self):
-        if self.searchEngine and self.searchEngine.pagination:
-            pre = self.searchEngine.pagination.get('before')
-            if pre:
-                self.search(pre)
+        pre = self._currentPagination.get('before') if self._currentPagination else None
+        if pre:
+            self.search(pre)
 
     def _updateStatusBar(self):
-        if not self.searchEngine or not self.searchEngine.pagination:
+        if not self._currentPagination:
             return
-        pagination = self.searchEngine.pagination
-        current = pagination.get('current', 0)
-        total = pagination.get('total_pages', 0)
-        tips = [
-            "用知识丰富自己的人生",
-            "学习路上，一往无前的你很酷",
-            "美好的东西，不应该被功利所玷污",
-        ]
-        tip = random.choice(tips)
-        self.statusBar.setText(f"[{current}/{total}] {tip}")
+        current = self._currentPagination.get('current', 0)
+        total = self._currentPagination.get('total_pages', 0)
+        self.statusBar.setText(f"[{current}/{total}]")
 
     def search(self, page=None):
-        self.tableWidget.clearContents()
-        self.navWidget.show()
-
         title = self.searchLineEdit.text()
         if not title:
             QMessageBox.warning(self, "提示", "请输入书名")
             return
 
         self._saveParams()
+        self.tableWidget.clearContents()
+        self.navWidget.show()
 
         lang = Languages[self.langComboBox.currentText()]
         ext = Extensions[self.extComboBox.currentText()]
@@ -157,25 +149,37 @@ class SearchPage(QWidget):
         accurate = "1" if self.accurate_CheckBox.isChecked() else None
         n = cfg.searchNums
 
-        try:
-            if self.searchEngine and self.searchEngine.isRunning():
-                self.searchEngine.wait(2000)
-        except RuntimeError:
-            self.searchEngine = None
-
-        self.statusBar.setText(f"搜索中: {title} ...")
-        self.searchEngine = Searcher(
+        self._searchSeq += 1
+        seq = self._searchSeq
+        engine = Searcher(
             title, languages=lang, extensions=ext, page=page,
             order=mode, limit=str(n), e=accurate
         )
-        self.searchEngine.sig_success.connect(self._showBooks)
-        self.searchEngine.sig_fail.connect(self._onFailed)
-        self.searchEngine.finished.connect(self.searchEngine.deleteLater)
-        self.searchEngine.start()
+        self._searchEngines.add(engine)
+        engine.sig_success.connect(lambda books, s=seq: self._showBooks(books, s))
+        engine.sig_fail.connect(lambda code, s=seq: self._onFailed(code, s))
+        engine.finished.connect(lambda e=engine: self._searchEngineFinished(e))
+        self.searchEngine = engine
+        self.statusBar.setText(f"搜索中: {title} ...")
+        engine.start()
 
-    def _showBooks(self, books):
+    def _searchEngineFinished(self, engine):
+        self._searchEngines.discard(engine)
+        engine.deleteLater()
+        if engine is self.searchEngine:
+            self.searchEngine = None
+
+    def _showBooks(self, books, seq):
+        if seq != self._searchSeq:
+            return
         self.books = books
+        if self.searchEngine and self.searchEngine.pagination:
+            self._currentPagination = self.searchEngine.pagination
         self._updateStatusBar()
+        self._fillTable(books)
+
+    def _fillTable(self, books):
+        self.tableWidget.setSortingEnabled(False)
         self.tableWidget.setRowCount(len(books))
         for i, book in enumerate(books):
             year = str(book.get('year', ''))
@@ -216,8 +220,11 @@ class SearchPage(QWidget):
             item6 = QTableWidgetItem(pages)
             item6.setTextAlignment(Qt.AlignCenter)
             self.tableWidget.setItem(i, 6, item6)
+        self.tableWidget.setSortingEnabled(True)
 
-    def _onFailed(self, code):
+    def _onFailed(self, code, seq):
+        if seq != self._searchSeq:
+            return
         self.tableWidget.clearContents()
         messages = {
             0: ("结果为空", "请更改搜索条件"),

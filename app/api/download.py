@@ -20,7 +20,7 @@ ANDROID_HEADERS = {
 def get_download_url(bookid, hashid, remix_key=None, remix_id=None):
     if remix_key is None or remix_id is None:
         pool = AccountPool()
-        account = pool.get_one()
+        account = pool.reserve_account()
         if account is None:
             return {'status': -1, 'error': 'No available account'}
         remix_id = account['remix_id']
@@ -36,14 +36,19 @@ def get_download_url(bookid, hashid, remix_key=None, remix_id=None):
     headers = {**ANDROID_HEADERS, 'host': host}
 
     start = time.time()
-    resp = requests.get(url, cookies=cookies, headers=headers, timeout=10)
+    resp = None
     try:
+        resp = requests.get(url, cookies=cookies, headers=headers, timeout=10)
         data = resp.json().get('file', {})
         allow = data.get('allowDownload', False)
         elapsed = time.time() - start
         if allow:
+            durl = data.get('downloadLink')
+            if not durl:
+                logger.warning(f"No download link in response, {elapsed:.2f}s")
+                return {'status': -1, 'remix_id': remix_id}
             logger.success(f"Got download URL in {elapsed:.2f}s")
-            return {'status': 1, 'durl': data['downloadLink'], 'remix_id': remix_id}
+            return {'status': 1, 'durl': durl, 'remix_id': remix_id}
         else:
             logger.warning(f"Download not allowed, {elapsed:.2f}s")
             return {'status': 0, 'remix_id': remix_id}
@@ -51,7 +56,8 @@ def get_download_url(bookid, hashid, remix_key=None, remix_id=None):
         logger.error(f"Get download URL failed: {e}")
         return {'status': -1, 'remix_id': remix_id}
     finally:
-        resp.close()
+        if resp is not None:
+            resp.close()
 
 
 def get_user_profile(remix_id, remix_key):
@@ -64,15 +70,20 @@ def get_user_profile(remix_id, remix_key):
     }
     headers = {**ANDROID_HEADERS, 'host': host}
 
+    resp = None
     try:
         resp = requests.get(url, cookies=cookies, headers=headers, timeout=10)
         data = resp.json()
         logger.debug(f"Profile response: {data}")
-        user = data.get('user', {})
-        downloads_today = user.get('downloads_today', 0)
-        downloads_limit = user.get('downloads_limit', 0)
-        resp.close()
+        user = data.get('user') or {}
+        downloads_today = user.get('downloads_today')
+        downloads_limit = user.get('downloads_limit')
+        if downloads_today is None or downloads_limit is None:
+            return None, None
         return downloads_limit, downloads_today
     except Exception as e:
         logger.error(f"Get profile failed for {remix_id}: {e}")
         return None, None
+    finally:
+        if resp is not None:
+            resp.close()

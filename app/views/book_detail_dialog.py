@@ -1,12 +1,31 @@
 # coding:utf-8
 import requests
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea,
     QWidget, QGridLayout, QSizePolicy
 )
 from ..common.config import cfg
+
+
+class CoverLoader(QThread):
+    loaded = Signal(bytes)
+
+    def __init__(self, url, parent=None):
+        super().__init__(parent)
+        self.url = url
+
+    def run(self):
+        resp = None
+        try:
+            resp = requests.get(self.url, timeout=10)
+            self.loaded.emit(resp.content)
+        except Exception:
+            self.loaded.emit(b'')
+        finally:
+            if resp is not None:
+                resp.close()
 
 
 class BookDetailDialog(QDialog):
@@ -80,16 +99,21 @@ class BookDetailDialog(QDialog):
         mainLayout.addWidget(scroll)
 
     def _loadCover(self, url, label):
-        try:
-            host = cfg.host
-            if url.startswith('/'):
-                url = f'https://{host}{url}'
-            resp = requests.get(url, timeout=10)
-            img = QImage()
-            img.loadFromData(resp.content)
-            pixmap = QPixmap.fromImage(img)
-            scaled = pixmap.scaled(180, 250, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            label.setPixmap(scaled)
-            resp.close()
-        except Exception:
+        if url.startswith('/'):
+            url = f'https://{cfg.host}{url}'
+        loader = CoverLoader(url, self)
+        loader.loaded.connect(lambda data, lbl=label: self._applyCover(data, lbl))
+        loader.finished.connect(loader.deleteLater)
+        loader.start()
+
+    def _applyCover(self, data, label):
+        if not data:
             label.setText("封面加载失败")
+            return
+        img = QImage()
+        if not img.loadFromData(data):
+            label.setText("封面加载失败")
+            return
+        pixmap = QPixmap.fromImage(img)
+        scaled = pixmap.scaled(180, 250, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        label.setPixmap(scaled)

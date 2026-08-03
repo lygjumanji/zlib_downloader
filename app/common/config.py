@@ -3,6 +3,7 @@ import sys
 import json
 import os
 import datetime
+from PySide6.QtCore import QTimer
 
 YEAR = datetime.datetime.now().year
 VERSION = "1.0.0"
@@ -70,6 +71,7 @@ FileNameTemplates = [
 class Config:
     def __init__(self):
         self._data = dict(DEFAULT_CONFIG)
+        self._timer = None
         self._load()
         if not os.path.exists(CONFIG_FILE):
             self.save()
@@ -94,7 +96,16 @@ class Config:
 
     def set(self, key, value):
         self._data[key] = value
-        self.save()
+        self._schedule_save()
+
+    def _schedule_save(self):
+        if self._timer is None:
+            self._timer = QTimer()
+            self._timer.setSingleShot(True)
+            self._timer.setInterval(500)
+            self._timer.timeout.connect(self.save)
+        if not self._timer.isActive():
+            self._timer.start()
 
     @property
     def downloadFolder(self):

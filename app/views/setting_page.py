@@ -1,11 +1,24 @@
 # coding:utf-8
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QGroupBox,
     QCheckBox, QSpinBox, QPushButton, QLabel, QFileDialog, QLineEdit,
-    QDialog, QDialogButtonBox
+    QDialog, QDialogButtonBox, QMessageBox
 )
 from ..common.config import cfg, VERSION, YEAR, FileNameTemplates
+from ..api.host import _resolve_host, _reset_resolved_host
+
+
+class HostCheckThread(QThread):
+    result_ready = Signal(str, str)
+
+    def __init__(self, host, parent=None):
+        super().__init__(parent)
+        self.host = host
+
+    def run(self):
+        real_host = _resolve_host(self.host)
+        self.result_ready.emit(self.host, real_host)
 
 
 class SettingPage(QWidget):
@@ -133,8 +146,29 @@ class SettingPage(QWidget):
         if dialog.exec():
             host = lineEdit.text().strip()
             if host:
-                cfg.set("host", host)
-                self.hostLabel.setText(host)
+                self._startHostCheck(host)
+
+    def _startHostCheck(self, host):
+        self.hostBtn.setEnabled(False)
+        self.hostLabel.setText(f"检测中: {host} ...")
+        self._hostWorker = HostCheckThread(host, self)
+        self._hostWorker.result_ready.connect(self._onHostChecked)
+        self._hostWorker.finished.connect(self._hostWorker.deleteLater)
+        self._hostWorker.start()
+
+    def _onHostChecked(self, host, real_host):
+        self.hostBtn.setEnabled(True)
+        if real_host and real_host != host:
+            reply = QMessageBox.question(
+                self, "检测到真实地址",
+                f"输入的 {host} 跟踪到真实地址 {real_host}\n是否使用真实地址？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+            )
+            if reply == QMessageBox.Yes:
+                host = real_host
+        cfg.set("host", host)
+        self.hostLabel.setText(host)
+        _reset_resolved_host()
 
     def _onFileNameCardClicked(self):
         from .template_dialog import TemplateDialog

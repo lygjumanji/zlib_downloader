@@ -11,7 +11,7 @@ from ..api.download import get_user_profile
 
 
 class ProfileWorker(QThread):
-    finished = Signal(list)
+    profile_done = Signal(list)
 
     def __init__(self, accounts):
         super().__init__()
@@ -27,7 +27,7 @@ class ProfileWorker(QThread):
                     'downloads_limit': limit,
                     'downloads_today': today,
                 })
-        self.finished.emit(results)
+        self.profile_done.emit(results)
 
 
 class AccountPage(QWidget):
@@ -97,8 +97,15 @@ class AccountPage(QWidget):
         self.refreshLimitsBtn.setEnabled(False)
         self.refreshLimitsBtn.setText("刷新中...")
         self.worker = ProfileWorker(accounts)
-        self.worker.finished.connect(self._onLimitsRefreshed)
+        self.worker.profile_done.connect(self._onLimitsRefreshed)
+        self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
+
+    def stop_worker(self):
+        if self.worker and self.worker.isRunning():
+            if not self.worker.wait(3000):
+                self.worker.terminate()
+                self.worker.wait(1000)
 
     def _onLimitsRefreshed(self, results):
         for r in results:
@@ -118,7 +125,7 @@ class AccountPage(QWidget):
             f"确定要将所有 {len(accounts)} 个账户的剩余额度重置为 10 吗？")
         if reply == QMessageBox.Yes:
             for acc in accounts:
-                self.pool.update_num(acc['remix_id'], 10)
+                self.pool.update_limits(acc['remix_id'], 10, 0)
             self._loadAccounts()
             QMessageBox.information(self, "成功", "所有账户额度已重置为 10")
 

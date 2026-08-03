@@ -36,7 +36,7 @@ def search_books(bookname, languages=None, page=None, extensions=None,
     }
 
     start = time.time()
-    resp = requests.post(url, headers=headers, data=data)
+    resp = requests.post(url, headers=headers, data=data, timeout=(5, 15))
     try:
         result = resp.json()
         elapsed = time.time() - start

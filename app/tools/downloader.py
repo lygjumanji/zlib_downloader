@@ -3,12 +3,12 @@ import sys
 import os
 import re
 import time
+import uuid
 import webbrowser
 import requests
 from PySide6.QtCore import QThread, Signal, QMutex
 from loguru import logger
 from ..api.download import get_download_url
-from ..db.account_pool import AccountPool
 from ..common.config import cfg
 
 if getattr(sys, 'frozen', False):
@@ -44,6 +44,7 @@ class Downloader(QThread):
         self._completed = False
         self._mutex = QMutex()
         self.file_name = ''
+        self.part_file = ''
         self.status = 'pending'
 
     def pause(self):
@@ -85,42 +86,42 @@ class Downloader(QThread):
             if not self._is_paused():
                 return False
             time.sleep(0.1)
-        return False
 
     def _make_filename(self):
         pattern = cfg.fileNamePattern
+        year = self.year if self.year not in ('', '0', 'None') else ''
         name = pattern.replace('%title%', self.raw_title)
-        name = name.replace('%year%', self.year)
+        name = name.replace('%year%', year)
         name = name.replace('%author%', self.author)
         name = re.sub(r'[\/\\:*?"<>|]', '', name)
+        name = re.sub(r'\s*\(\s*\)', '', name)
+        name = name.rstrip(' .')
         if not name.endswith(f'.{self.extension}'):
             name = f"{name}.{self.extension}"
         return name
+
+    def _finish_stopped(self):
+        self.status = 'stopped'
+        self.sig_status.emit('stopped')
+        self.final.emit(False, self.raw_title)
 
     def run(self):
         self.status = 'downloading'
         self.sig_status.emit('downloading')
         try:
             self.file_name = self._make_filename()
+            self.part_file = os.path.join(self.path, f".{self.bookid}.{self.hashid}.part")
             if self._wait_if_paused():
-                self.status = 'stopped'
-                self.sig_status.emit('stopped')
-                self.final.emit(False, self.raw_title)
+                self._finish_stopped()
                 return
             if not self._check_repeat():
                 self._log_fail("文件已存在，跳过")
                 self.final.emit(False, self.raw_title)
                 return
             result = get_download_url(self.bookid, self.hashid)
-            remix_id = result.get('remix_id')
-            if remix_id:
-                pool = AccountPool()
-                pool.decrement_num(remix_id)
             if self._wait_if_paused():
                 self._cleanup_file()
-                self.status = 'stopped'
-                self.sig_status.emit('stopped')
-                self.final.emit(False, self.raw_title)
+                self._finish_stopped()
                 return
             status_code = result.get('status', -1)
             if status_code == 1:
@@ -133,6 +134,7 @@ class Downloader(QThread):
                 self.sig_rate_limit.emit(999)
         except Exception as e:
             logger.error(f"Download error: {e}")
+            self._cleanup_file()
             self._log_fail(str(e))
             self.final.emit(False, self.raw_title)
 
@@ -146,56 +148,59 @@ class Downloader(QThread):
                 return False
             else:
                 base, ext = os.path.splitext(self.file_name)
-                self.file_name = f"{base}_{int(time.time())}{ext}"
+                self.file_name = f"{base}_{uuid.uuid4().hex[:8]}{ext}"
         return True
 
     def _handle_download(self, durl):
+        response = None
         try:
             response = requests.get(durl, stream=True, timeout=30)
             if self._is_stopped():
-                response.close()
                 self._cleanup_file()
-                self.status = 'stopped'
-                self.sig_status.emit('stopped')
-                self.final.emit(False, self.raw_title)
+                self._finish_stopped()
                 return
             self.sig_start.emit(self.raw_title)
             self._download_file(response)
         except requests.exceptions.ConnectionError:
+            self._cleanup_file()
             self._log_fail("连接失败，已打开浏览器")
             webbrowser.open(durl)
             self.final.emit(False, self.raw_title)
         except Exception as e:
+            self._cleanup_file()
             logger.error(f"Download error: {e}")
             self._log_fail(str(e))
             self.final.emit(False, self.raw_title)
+        finally:
+            if response is not None:
+                try:
+                    response.close()
+                except Exception:
+                    pass
 
     def _download_file(self, response):
-        file_path = os.path.join(self.path, self.file_name)
+        file_path = self.part_file
+        if not os.path.exists(self.path):
+            os.makedirs(self.path, exist_ok=True)
         read = 0
         csize = 1024
-        file_size = int(self.size) if self.size else int(response.headers.get('content-length', 1))
+        try:
+            file_size = int(self.size) if self.size else int(response.headers.get('content-length', 0) or 0)
+        except (ValueError, TypeError):
+            file_size = 0
         interval_bytes = 0
         interval_start = time.time()
 
-        with open(file_path, 'ab') as f:
+        with open(file_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=csize):
                 if self._is_stopped():
-                    response.close()
-                    f.close()
                     self._cleanup_file()
-                    self.status = 'stopped'
-                    self.sig_status.emit('stopped')
-                    self.final.emit(False, self.raw_title)
+                    self._finish_stopped()
                     return
                 while self._is_paused():
                     if self._is_stopped():
-                        response.close()
-                        f.close()
                         self._cleanup_file()
-                        self.status = 'stopped'
-                        self.sig_status.emit('stopped')
-                        self.final.emit(False, self.raw_title)
+                        self._finish_stopped()
                         return
                     time.sleep(0.1)
                 if chunk:
@@ -203,8 +208,8 @@ class Downloader(QThread):
                     chunk_len = len(chunk)
                     read += chunk_len
                     interval_bytes += chunk_len
-                    read = min(read, file_size)
                     process = int(read / file_size * 100) if file_size > 0 else 0
+                    process = min(process, 100)
                     current_time = time.time()
                     elapsed = current_time - interval_start
                     if elapsed >= 1.0:
@@ -214,11 +219,34 @@ class Downloader(QThread):
                         interval_start = current_time
                     self.sig_down_process.emit(process)
 
+        if self._is_stopped():
+            self._cleanup_file()
+            self._finish_stopped()
+            return
+
+        elapsed = time.time() - interval_start
+        if interval_bytes and elapsed >= 0.05:
+            speed_val = interval_bytes / 1024 / elapsed
+            self.speed.emit(round(speed_val, 2))
+
+        self._finalize_file(file_path)
         self._completed = True
         self.status = 'completed'
         self.sig_status.emit('completed')
         self._log_download()
         self.final.emit(True, self.raw_title)
+
+    def _finalize_file(self, part_path):
+        final_path = os.path.join(self.path, self.file_name)
+        if os.path.exists(final_path):
+            base, ext = os.path.splitext(self.file_name)
+            self.file_name = f"{base}_{uuid.uuid4().hex[:8]}{ext}"
+            final_path = os.path.join(self.path, self.file_name)
+        try:
+            os.replace(part_path, final_path)
+        except OSError as e:
+            logger.error(f"Failed to finalize file: {e}")
+            raise
 
     def _log_download(self):
         os.makedirs(LOG_DIR, exist_ok=True)
@@ -240,10 +268,9 @@ class Downloader(QThread):
     def _cleanup_file(self):
         if self._completed:
             return
-        file_path = os.path.join(self.path, self.file_name)
-        if self.file_name and os.path.exists(file_path):
+        if self.part_file and os.path.exists(self.part_file):
             try:
-                os.remove(file_path)
-                logger.info(f"Removed incomplete file: {file_path}")
+                os.remove(self.part_file)
+                logger.info(f"Removed incomplete file: {self.part_file}")
             except Exception as e:
                 logger.error(f"Failed to remove file: {e}")
