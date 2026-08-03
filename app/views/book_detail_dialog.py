@@ -1,0 +1,95 @@
+# coding:utf-8
+import requests
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QPixmap, QImage
+from PySide6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea,
+    QWidget, QGridLayout, QSizePolicy
+)
+from ..common.config import cfg
+
+
+class BookDetailDialog(QDialog):
+    def __init__(self, book, parent=None):
+        super().__init__(parent)
+        self.book = book
+        self.setWindowTitle("书籍详情")
+        self.setMinimumSize(500, 600)
+        self._initUI()
+
+    def _initUI(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+
+        content = QWidget()
+        layout = QVBoxLayout(content)
+
+        coverLabel = QLabel()
+        coverLabel.setAlignment(Qt.AlignCenter)
+        coverLabel.setFixedHeight(250)
+        coverLabel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        coverLabel.setStyleSheet("border: 1px solid #ccc; background: #f5f5f5;")
+        layout.addWidget(coverLabel)
+
+        cover_url = self.book.get('cover', '') or self.book.get('coverUrl', '')
+        if cover_url:
+            self._loadCover(cover_url, coverLabel)
+
+        grid = QGridLayout()
+        grid.setSpacing(8)
+
+        fields = [
+            ("书名:", self.book.get('title', '')),
+            ("作者:", self.book.get('author', '')),
+            ("出版社:", self.book.get('publisher', '')),
+            ("年份:", str(self.book.get('year', ''))),
+            ("页数:", str(self.book.get('pages', ''))),
+            ("语言:", self.book.get('language', '')),
+            ("格式:", self.book.get('extension', '')),
+            ("文件大小:", self.book.get('filesizeString', '')),
+            ("Book ID:", str(self.book.get('id', ''))),
+            ("Hash:", self.book.get('hash', '')),
+        ]
+
+        for r, (label_text, value) in enumerate(fields):
+            lbl = QLabel(label_text)
+            lbl.setStyleSheet("font-weight: bold;")
+            val = QLabel(str(value))
+            val.setWordWrap(True)
+            val.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            grid.addWidget(lbl, r, 0)
+            grid.addWidget(val, r, 1)
+
+        layout.addLayout(grid)
+
+        desc = self.book.get('description', '') or self.book.get('desc', '')
+        if desc:
+            descLabel = QLabel("简介:")
+            descLabel.setStyleSheet("font-weight: bold; margin-top: 8px;")
+            layout.addWidget(descLabel)
+            descText = QLabel(desc)
+            descText.setWordWrap(True)
+            descText.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            descText.setStyleSheet("border: 1px solid #ccc; padding: 6px; background: #fafafa;")
+            layout.addWidget(descText)
+
+        layout.addStretch()
+        scroll.setWidget(content)
+
+        mainLayout = QVBoxLayout(self)
+        mainLayout.addWidget(scroll)
+
+    def _loadCover(self, url, label):
+        try:
+            host = cfg.host
+            if url.startswith('/'):
+                url = f'https://{host}{url}'
+            resp = requests.get(url, timeout=10)
+            img = QImage()
+            img.loadFromData(resp.content)
+            pixmap = QPixmap.fromImage(img)
+            scaled = pixmap.scaled(180, 250, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            label.setPixmap(scaled)
+            resp.close()
+        except Exception:
+            label.setText("封面加载失败")
