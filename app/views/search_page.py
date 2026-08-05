@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QMenu, QLabel, QProgressBar, QMessageBox
 )
 from ..tools.searcher import Searcher
-from ..common.config import cfg, Languages, SearchMode, Extensions
+from ..common.config import cfg, YEAR, Languages, SearchMode, Extensions
 
 
 class SearchPage(QWidget):
@@ -50,6 +50,13 @@ class SearchPage(QWidget):
         for k in Extensions:
             self.extComboBox.addItem(k)
 
+        self.yearFromComboBox = QComboBox()
+        self.yearToComboBox = QComboBox()
+        for combo in (self.yearFromComboBox, self.yearToComboBox):
+            combo.addItem("不限")
+            for y in range(YEAR, 1899, -1):
+                combo.addItem(str(y))
+
         hbox.addWidget(self.accurate_CheckBox)
         hbox.addWidget(QLabel("排序:"))
         hbox.addWidget(self.searchComboBox)
@@ -57,6 +64,10 @@ class SearchPage(QWidget):
         hbox.addWidget(self.langComboBox)
         hbox.addWidget(QLabel("格式:"))
         hbox.addWidget(self.extComboBox)
+        hbox.addWidget(QLabel("年份:"))
+        hbox.addWidget(self.yearFromComboBox)
+        hbox.addWidget(QLabel("至"))
+        hbox.addWidget(self.yearToComboBox)
         hbox.addStretch()
 
         self.tableWidget = QTableWidget()
@@ -116,6 +127,10 @@ class SearchPage(QWidget):
         cfg.set("searchMode", self.searchComboBox.currentIndex())
         cfg.set("accurate", self.accurate_CheckBox.isChecked())
 
+    def _yearValue(self, combo):
+        text = combo.currentText()
+        return text if text != "不限" else ""
+
     def _nextPage(self):
         nxt = self._currentPagination.get('next') if self._currentPagination else None
         if nxt:
@@ -147,13 +162,16 @@ class SearchPage(QWidget):
         ext = Extensions[self.extComboBox.currentText()]
         mode = SearchMode[self.searchComboBox.currentText()]
         accurate = "1" if self.accurate_CheckBox.isChecked() else None
+        yearFrom = self._yearValue(self.yearFromComboBox) or None
+        yearTo = self._yearValue(self.yearToComboBox) or None
         n = cfg.searchNums
 
         self._searchSeq += 1
         seq = self._searchSeq
         engine = Searcher(
             title, languages=lang, extensions=ext, page=page,
-            order=mode, limit=str(n), e=accurate
+            order=mode, limit=str(n), e=accurate,
+            yearFrom=yearFrom, yearTo=yearTo
         )
         self._searchEngines.add(engine)
         engine.sig_success.connect(lambda books, s=seq: self._showBooks(books, s))

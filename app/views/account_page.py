@@ -8,6 +8,24 @@ from PySide6.QtWidgets import (
 )
 from ..db.account_pool import AccountPool
 from ..api.download import get_user_profile
+from ..api.auth import login
+
+
+class LoginWorker(QThread):
+    login_done = Signal(str, str)
+    login_fail = Signal(str)
+
+    def __init__(self, email, password):
+        super().__init__()
+        self.email = email
+        self.password = password
+
+    def run(self):
+        remix_id, remix_key = login(self.email, self.password)
+        if remix_id and remix_key:
+            self.login_done.emit(remix_id, remix_key)
+        else:
+            self.login_fail.emit("登录失败，请检查用户名和密码")
 
 
 class ProfileWorker(QThread):
@@ -46,7 +64,6 @@ class AccountPage(QWidget):
         self.deleteBtn = QPushButton("删除选中")
         self.refreshBtn = QPushButton("刷新列表")
         self.refreshLimitsBtn = QPushButton("刷新额度")
-        self.resetNumBtn = QPushButton("重置额度")
         self.importBtn = QPushButton("导入 JSON")
         self.exportBtn = QPushButton("导出 JSON")
 
@@ -54,17 +71,15 @@ class AccountPage(QWidget):
         self.deleteBtn.clicked.connect(self._deleteAccount)
         self.refreshBtn.clicked.connect(self._loadAccounts)
         self.refreshLimitsBtn.clicked.connect(self._refreshLimits)
-        self.resetNumBtn.clicked.connect(self._resetNum)
         self.importBtn.clicked.connect(self._importJson)
         self.exportBtn.clicked.connect(self._exportJson)
 
         hbox.addWidget(self.addBtn)
         hbox.addWidget(self.deleteBtn)
         hbox.addWidget(self.refreshBtn)
-        hbox.addWidget(self.refreshLimitsBtn)
-        hbox.addWidget(self.resetNumBtn)
         hbox.addWidget(self.importBtn)
         hbox.addWidget(self.exportBtn)
+        hbox.addWidget(self.refreshLimitsBtn)
         hbox.addStretch()
 
         self.tableWidget = QTableWidget()
@@ -115,25 +130,26 @@ class AccountPage(QWidget):
         self.refreshLimitsBtn.setText("刷新额度")
         QMessageBox.information(self, "成功", f"已刷新 {len(results)} 个账户额度")
 
-    def _resetNum(self):
-        accounts = self.pool.get_all()
-        if not accounts:
-            QMessageBox.warning(self, "提示", "没有账户可重置")
-            return
-        reply = QMessageBox.question(
-            self, "确认重置",
-            f"确定要将所有 {len(accounts)} 个账户的剩余额度重置为 10 吗？")
-        if reply == QMessageBox.Yes:
-            for acc in accounts:
-                self.pool.update_limits(acc['remix_id'], 10, 0)
-            self._loadAccounts()
-            QMessageBox.information(self, "成功", "所有账户额度已重置为 10")
-
     def _addAccount(self):
         dialog = QDialog(self)
         dialog.setWindowTitle("添加账户")
-        dialog.setMinimumWidth(300)
+        dialog.setMinimumWidth(320)
         formLayout = QVBoxLayout(dialog)
+        self._loginWorker = None
+
+        formLayout.addWidget(QLabel("用户名/邮箱:"))
+        emailEdit = QLineEdit()
+        emailEdit.setPlaceholderText("请输入 Z-Library 登录邮箱")
+        formLayout.addWidget(emailEdit)
+
+        formLayout.addWidget(QLabel("密码:"))
+        passwordEdit = QLineEdit()
+        passwordEdit.setEchoMode(QLineEdit.Password)
+        passwordEdit.setPlaceholderText("请输入登录密码")
+        formLayout.addWidget(passwordEdit)
+
+        fetchBtn = QPushButton("自动获取 Remix ID 和 Key")
+        formLayout.addWidget(fetchBtn)
 
         formLayout.addWidget(QLabel("Remix ID:"))
         idEdit = QLineEdit()
@@ -147,10 +163,58 @@ class AccountPage(QWidget):
         numEdit = QLineEdit("10")
         formLayout.addWidget(numEdit)
 
+        statusLabel = QLabel("")
+        statusLabel.setAlignment(Qt.AlignCenter)
+        formLayout.addWidget(statusLabel)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         formLayout.addWidget(buttons)
+
+        def _onLoginDone(remix_id, remix_key):
+            idEdit.setText(remix_id)
+            keyEdit.setText(remix_key)
+            statusLabel.setText("获取成功")
+            fetchBtn.setEnabled(True)
+            QMessageBox.information(dialog, "成功", "已获取 Remix ID 和 Key")
+
+        def _onLoginFail(msg):
+            statusLabel.setText(msg)
+            fetchBtn.setEnabled(True)
+            QMessageBox.warning(dialog, "失败", msg)
+
+        def _clearLoginWorker(worker):
+            if self._loginWorker is worker:
+                self._loginWorker = None
+            worker.deleteLater()
+
+        def _onFetch():
+            email = emailEdit.text().strip()
+            password = passwordEdit.text().strip()
+            if not email or not password:
+                QMessageBox.warning(dialog, "提示", "请输入用户名和密码")
+                return
+            fetchBtn.setEnabled(False)
+            statusLabel.setText("登录获取中...")
+            worker = LoginWorker(email, password)
+            self._loginWorker = worker
+            worker.login_done.connect(_onLoginDone)
+            worker.login_fail.connect(_onLoginFail)
+            worker.finished.connect(lambda w=worker: _clearLoginWorker(w))
+            worker.start()
+
+        def _stopLoginWorker():
+            worker = self._loginWorker
+            if worker and worker.isRunning():
+                if not worker.wait(3000):
+                    worker.terminate()
+                    worker.wait(1000)
+                self._loginWorker = None
+
+        fetchBtn.clicked.connect(_onFetch)
+        passwordEdit.returnPressed.connect(fetchBtn.click)
+        dialog.finished.connect(_stopLoginWorker)
 
         if dialog.exec():
             try:
