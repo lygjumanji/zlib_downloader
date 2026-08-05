@@ -6,7 +6,7 @@ import datetime
 from PySide6.QtCore import QTimer
 
 YEAR = datetime.datetime.now().year
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)

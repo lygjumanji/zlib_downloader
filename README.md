@@ -6,7 +6,7 @@
 Z-Library Book Downloader (Zlib Downloader)
 
 ### 1.2 项目版本
-v1.0.0
+v1.1.0
 
 ### 1.3 项目简介
 基于 PySide6 开发的桌面应用程序，用于从 Z-Library 下载电子书籍。参考olib,采用单体架构，直接调用 Z-Library eapi 接口，无需后端服务器。
@@ -38,13 +38,15 @@ main.py → app/views/ → app/tools/ → app/api/ → Z-Library eapi
 zlib_downloader/
 ├── main.py                          # 程序入口
 ├── requirements.txt                 # 依赖清单
-├── accounts.json                    # 账户种子数据
-├── accounts.db                      # SQLite3 数据库
+├── zlibdown.spec                    # PyInstaller 打包配置
+├── zlib.ico                         # 应用图标
+├── accounts.db                      # SQLite3 数据库（运行时生成）
 ├── config/
 │   └── config.json                  # 用户配置文件
 ├── app/
 │   ├── api/                         # API 调用层
 │   │   ├── host.py                  # 域名解析
+│   │   ├── auth.py                  # 登录接口
 │   │   ├── search.py                # 搜索接口
 │   │   └── download.py              # 下载接口
 │   ├── views/                       # GUI 页面
@@ -63,8 +65,7 @@ zlib_downloader/
 │   ├── common/                      # 公共配置
 │   │   └── config.py                # 配置管理
 │   └── utils/                       # 工具函数
-│       ├── log.py                   # 日志配置
-│       └── uuid.py                  # 设备指纹
+│       └── log.py                   # 日志配置
 └── dist/                            # 打包输出
 ```
 
@@ -81,7 +82,7 @@ zlib_downloader/
 
 #### 3.1.2 搜索接口 (`search.py`)
 - **接口**: `POST https://{host}/eapi/book/search`
-- **参数**: 书名、语言、格式、排序、分页等
+- **参数**: 书名、语言、格式、排序、年份范围、分页等
 - **认证**: 无需登录
 - **返回**: 书籍列表 + 分页信息
 
@@ -89,6 +90,13 @@ zlib_downloader/
 - **获取下载URL**: `GET https://{host}/eapi/book/{id}/{hash}/file`
 - **获取用户信息**: `GET https://{host}/eapi/user/profile`
 - **认证**: Cookie (remix_userid + remix_userkey)
+
+#### 3.1.4 登录接口 (`auth.py`)
+- **接口**: `POST https://{host}/eapi/user/login`
+- **参数**: email, password
+- **认证**: 无需登录
+- **返回**: `{user: {id: ..., remix_userkey: ...}}`
+- **用途**: 通过用户名/密码自动获取 Remix ID 与 Remix Key，无需手动填写
 
 ### 3.2 GUI 页面模块 (`app/views/`)
 
@@ -99,6 +107,7 @@ zlib_downloader/
 
 #### 3.2.2 搜索页 (`search_page.py`)
 - 搜索框 + 筛选条件
+- 年份范围筛选（起止年份下拉框）
 - 结果表格展示
 - 右键菜单操作
 - 分页导航
@@ -117,6 +126,7 @@ zlib_downloader/
 
 #### 3.2.5 账户页 (`account_page.py`)
 - 账户 CRUD
+- 用户名/密码自动获取 Remix ID/Key
 - 额度刷新
 - JSON 导入导出
 
@@ -175,7 +185,7 @@ zlib_downloader/
 
 ### 5.2 搜索接口
 - **URL**: `POST /eapi/book/search`
-- **参数**: message, languages[], extensions[], order, limit, page
+- **参数**: message, languages[], extensions[], order, limit, page, yearFrom, yearTo
 - **返回**: `{success: 1, books: [...], pagination: {...}}`
 
 ### 5.3 下载接口
@@ -183,7 +193,12 @@ zlib_downloader/
 - **认证**: Cookie remix_userid + remix_userkey
 - **返回**: `{file: {downloadLink: "..."}}`
 
-### 5.4 用户资料接口
+### 5.4 登录接口
+- **URL**: `POST /eapi/user/login`
+- **参数**: email, password
+- **返回**: `{user: {id: N, remix_userkey: "..."}}`
+
+### 5.5 用户资料接口
 - **URL**: `GET /eapi/user/profile`
 - **返回**: `{user: {downloads_today: N, downloads_limit: N}}`
 
@@ -207,6 +222,7 @@ zlib_downloader/
 2. 下载成功后 num - 1
 3. num 归零后不再使用
 4. 支持手动/API刷新额度
+5. 支持通过用户名/密码登录自动获取账户凭证并入库
 
 ---
 
@@ -283,5 +299,6 @@ pyinstaller -F -w -i zlib.ico --name zlibdown  main.py
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.1.0 | 2026-08-05 | 新增年份范围搜索筛选；账户页支持用户名/密码自动获取 Remix ID/Key；移除"重置额度"按钮 |
 | v1.0.0 | 2026-08-03 | 初始版本 |
 
