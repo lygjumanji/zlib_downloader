@@ -1,9 +1,11 @@
 # coding:utf-8
 import os
+import sys
+import subprocess
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
-    QHeaderView, QProgressBar, QLabel, QPushButton, QMessageBox
+    QHeaderView, QProgressBar, QLabel, QPushButton, QMessageBox, QMenu
 )
 from ..tools.downloader import Downloader
 from ..common.config import cfg
@@ -41,6 +43,9 @@ class DownloadPage(QWidget):
         self.tableWidget.setColumnWidth(4, 60)
         self.tableWidget.setColumnWidth(5, 120)
         self.tableWidget.verticalHeader().setDefaultSectionSize(36)
+        self.tableWidget.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tableWidget.customContextMenuRequested.connect(self._showContextMenu)
+        self.tableWidget.cellDoubleClicked.connect(self._onCellDoubleClicked)
 
         layout.addWidget(self.tableWidget)
 
@@ -203,3 +208,54 @@ class DownloadPage(QWidget):
         self.tableWidget.removeRow(removed_row)
         self._syncRows(removed_row)
         downloader.deleteLater()
+
+    def _downloaderAtRow(self, row):
+        for d in self.downloaders:
+            info = self.downloaderMap.get(id(d))
+            if info and info['row'] == row:
+                return d
+        return None
+
+    def _onCellDoubleClicked(self, row, column):
+        downloader = self._downloaderAtRow(row)
+        if not downloader or not downloader._completed:
+            return
+        self._openFile(downloader)
+
+    def _showContextMenu(self, pos):
+        row = self.tableWidget.rowAt(pos.y())
+        if row < 0 or row >= self.tableWidget.rowCount():
+            return
+        downloader = self._downloaderAtRow(row)
+        if not downloader or not downloader._completed:
+            return
+
+        menu = QMenu(self)
+        openAction = menu.addAction("打开文件")
+        openAction.triggered.connect(lambda: self._openFile(downloader))
+        openDirAction = menu.addAction("打开所在目录")
+        openDirAction.triggered.connect(lambda: self._openContainingDir(downloader))
+        menu.exec(self.tableWidget.viewport().mapToGlobal(pos))
+
+    def _openFile(self, downloader):
+        path = os.path.join(downloader.path, downloader.file_name)
+        if not os.path.exists(path):
+            QMessageBox.warning(self, "提示", "文件不存在，可能已被移动或删除。")
+            return
+        try:
+            os.startfile(path)
+        except Exception as e:
+            QMessageBox.warning(self, "提示", f"打开文件失败：{e}")
+
+    def _openContainingDir(self, downloader):
+        path = os.path.join(downloader.path, downloader.file_name)
+        if not os.path.exists(path):
+            QMessageBox.warning(self, "提示", "文件不存在，可能已被移动或删除。")
+            return
+        try:
+            if sys.platform.startswith('win'):
+                subprocess.Popen(['explorer', '/select,', path])
+            else:
+                os.startfile(os.path.dirname(path))
+        except Exception as e:
+            QMessageBox.warning(self, "提示", f"打开目录失败：{e}")

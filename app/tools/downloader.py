@@ -191,18 +191,19 @@ class Downloader(QThread):
         interval_bytes = 0
         interval_start = time.time()
 
+        stopped = False
         with open(file_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=csize):
                 if self._is_stopped():
-                    self._cleanup_file()
-                    self._finish_stopped()
-                    return
+                    stopped = True
+                    break
                 while self._is_paused():
                     if self._is_stopped():
-                        self._cleanup_file()
-                        self._finish_stopped()
-                        return
+                        stopped = True
+                        break
                     time.sleep(0.1)
+                if stopped:
+                    break
                 if chunk:
                     f.write(chunk)
                     chunk_len = len(chunk)
@@ -219,7 +220,7 @@ class Downloader(QThread):
                         interval_start = current_time
                     self.sig_down_process.emit(process)
 
-        if self._is_stopped():
+        if stopped or self._is_stopped():
             self._cleanup_file()
             self._finish_stopped()
             return

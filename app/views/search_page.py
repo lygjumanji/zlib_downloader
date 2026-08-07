@@ -81,6 +81,7 @@ class SearchPage(QWidget):
         self.tableWidget.verticalHeader().setDefaultSectionSize(36)
         self.tableWidget.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tableWidget.customContextMenuRequested.connect(self._showContextMenu)
+        self.tableWidget.cellDoubleClicked.connect(self._onCellDoubleClicked)
         self._colRatios = [240, 50, 120, 60, 45, 100, 45]
 
         self.statusBar = QLabel("欢迎使用 Zlib Downloader")
@@ -295,4 +296,12 @@ class SearchPage(QWidget):
         book = self.books[row]
         from .book_detail_dialog import BookDetailDialog
         dialog = BookDetailDialog(book, self)
+        dialog.sig_download.connect(self.sig_download_start)
         dialog.exec()
+
+    def _onCellDoubleClicked(self, row, column):
+        item = self.tableWidget.item(row, 0)
+        if not item:
+            return
+        source_row = item.data(Qt.UserRole)
+        self._showBookDetail(source_row)

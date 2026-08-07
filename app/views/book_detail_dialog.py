@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea,
-    QWidget, QGridLayout, QSizePolicy
+    QWidget, QGridLayout, QSizePolicy, QPushButton
 )
 from ..common.config import cfg
 
@@ -29,6 +29,8 @@ class CoverLoader(QThread):
 
 
 class BookDetailDialog(QDialog):
+    sig_download = Signal(list)
+
     def __init__(self, book, parent=None):
         super().__init__(parent)
         self.book = book
@@ -97,6 +99,28 @@ class BookDetailDialog(QDialog):
 
         mainLayout = QVBoxLayout(self)
         mainLayout.addWidget(scroll)
+
+        btnLayout = QHBoxLayout()
+        btnLayout.addStretch()
+        downloadBtn = QPushButton("下载书籍")
+        downloadBtn.setMinimumWidth(120)
+        downloadBtn.clicked.connect(self._onDownload)
+        btnLayout.addWidget(downloadBtn)
+        btnLayout.addStretch()
+        mainLayout.addLayout(btnLayout)
+
+    def _onDownload(self):
+        book = self.book
+        self.sig_download.emit([
+            book.get('id'),
+            book.get('hash'),
+            book.get('title'),
+            book.get('extension'),
+            book.get('filesize'),
+            book.get('year', ''),
+            book.get('author', '')
+        ])
+        self.accept()
 
     def _loadCover(self, url, label):
         if url.startswith('/'):

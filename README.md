@@ -6,7 +6,7 @@
 Z-Library Book Downloader (Zlib Downloader)
 
 ### 1.2 项目版本
-v1.1.0
+v1.2.0
 
 ### 1.3 项目简介
 基于 PySide6 开发的桌面应用程序，用于从 Z-Library 下载电子书籍。参考olib,采用单体架构，直接调用 Z-Library eapi 接口，无需后端服务器。
@@ -299,6 +299,7 @@ pyinstaller -F -w -i zlib.ico --name zlibdown  main.py
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
+| v1.2.0 | 2026-08-07 | 搜索页双击打开书籍详情；下载页双击打开已完成文件、右键菜单打开所在目录 |
 | v1.1.0 | 2026-08-05 | 新增年份范围搜索筛选；账户页支持用户名/密码自动获取 Remix ID/Key；移除"重置额度"按钮 |
 | v1.0.0 | 2026-08-03 | 初始版本 |
 
